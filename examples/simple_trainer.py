@@ -773,8 +773,12 @@ def main(cfg: Config):
     if cfg.ckpt is not None:
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
+        runner_splats_key_to_ckpt_key = {"means": "means3d"}
         for k in runner.splats.keys():
-            runner.splats[k].data = ckpt["splats"][k]
+            if k in runner_splats_key_to_ckpt_key.keys():
+                runner.splats[k].data = ckpt["splats"][runner_splats_key_to_ckpt_key[k]]
+            else:
+                runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
     else:
