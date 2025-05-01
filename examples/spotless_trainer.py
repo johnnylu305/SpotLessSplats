@@ -828,9 +828,29 @@ class Runner:
                     .numpy()
                 )
                 imname = image_ids.cpu().detach().numpy()
+                os.makedirs(f"{self.render_dir}/composition", exist_ok=True)
+                pixels_np = pixels.squeeze(0).cpu().detach().numpy()
+                rgb_pred_mask_np = rgb_pred_mask.squeeze(0).cpu().detach().numpy()
+                colors_np = colors.squeeze(0).cpu().detach().numpy()
+                image_name = data["image_name"][0][:-4]
                 imageio.imwrite(
-                    f"{self.render_dir}/train_{imname}.png",
+                    f"{self.render_dir}/composition/train_{image_name}.png",
                     (canvas * 255).astype(np.uint8),
+                )
+                os.makedirs(f"{self.render_dir}/data", exist_ok=True)
+                imageio.imwrite(
+                    f"{self.render_dir}/data/train_{image_name}.png",
+                    (pixels_np * 255).astype(np.uint8),
+                )
+                os.makedirs(f"{self.render_dir}/render", exist_ok=True)
+                imageio.imwrite(
+                    f"{self.render_dir}/render/train_{image_name}.png",
+                    (colors_np * 255).astype(np.uint8),
+                )
+                os.makedirs(f"{self.render_dir}/mask", exist_ok=True)
+                imageio.imwrite(
+                    f"{self.render_dir}/mask/train_{image_name}.png",
+                    (rgb_pred_mask_np * 255).astype(np.uint8),
                 )
                 global_tic += time.time() - st_interval
 
