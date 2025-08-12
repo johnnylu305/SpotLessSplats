@@ -660,7 +660,6 @@ class Runner:
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
             )
-
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
             colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
             metrics["psnr"].append(self.psnr(colors, pixels))
@@ -773,12 +772,8 @@ def main(cfg: Config):
     if cfg.ckpt is not None:
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
-        runner_splats_key_to_ckpt_key = {"means": "means3d"}
         for k in runner.splats.keys():
-            if k in runner_splats_key_to_ckpt_key.keys():
-                runner.splats[k].data = ckpt["splats"][runner_splats_key_to_ckpt_key[k]]
-            else:
-                runner.splats[k].data = ckpt["splats"][k]
+            runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
     else:

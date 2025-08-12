@@ -41,6 +41,8 @@ class Config:
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
 
+    use_post_mask: bool = False
+
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
@@ -302,6 +304,7 @@ class Runner:
             train_keyword=cfg.train_keyword,
             test_keyword=cfg.test_keyword,
             semantics=cfg.semantics,
+            use_post_mask=cfg.use_post_mask
         )
         self.valset = ClutterDataset(
             self.parser,
@@ -589,6 +592,8 @@ class Runner:
             else:
                 colors, depths = renders, None
 
+            colors = torch.clamp(colors, 0, 1)
+
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
@@ -638,6 +643,7 @@ class Runner:
                         upper_mask = self.robust_mask(
                             error_per_pixel, self.running_stats["upper_err"]
                         )
+                # mask
                 log_pred_mask = pred_mask.clone()
                 if cfg.schedule:
                     # schedule sampling of the mask based on alpha
@@ -649,6 +655,12 @@ class Runner:
                             max=1.0,
                         )
                     )
+                if cfg.use_post_mask:
+                    b, h, w, c = pred_mask.shape
+                    post_mask = data["post_mask"].to(device).reshape(b, h, w, c)
+                    print("Before Post:", torch.sum(pred_mask))
+                    pred_mask = pred_mask*post_mask #(1-post_mask)
+                    print("After Post:", torch.sum(pred_mask))
                 rgbloss = (pred_mask.clone().detach() * error_per_pixel).mean()
             ssimloss = 1.0 - self.ssim(
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
@@ -678,6 +690,19 @@ class Runner:
 
             if self.mlp_spotless:
                 self.spotless_module.train()
+                # (b, h, w, c)
+                #print(upper_mask.shape)
+                if cfg.use_post_mask:
+                    b, h, w, c = upper_mask.shape
+                    # outlier: 1, inlier: 0
+                    post_mask = data["post_mask"].to(device).reshape(b, h, w, c)
+                    print("Before merge:", h*w-torch.sum(upper_mask))
+                    upper_mask = upper_mask*post_mask#(1-post_mask)
+                    print("After merge:", h*w-torch.sum(upper_mask))
+                # upper_mask: supervise outlier, 0
+                # 1: inliner, 0 outlier
+                # lower_mask: supervise inlier, 1
+                # 1: inlier, 0 outlier
                 spot_loss = self.spotless_loss(
                     pred_mask_up.flatten(), upper_mask.flatten(), lower_mask.flatten()
                 )
@@ -817,6 +842,7 @@ class Runner:
             # Save the mask image
             if step > max_steps - 200 and cfg.semantics:
                 st_interval = time.time()
+                # mask
                 rgb_pred_mask = (
                     (log_pred_mask > 0.5).repeat(1, 1, 1, 3).clone().detach()
                 )
@@ -832,7 +858,10 @@ class Runner:
                 pixels_np = pixels.squeeze(0).cpu().detach().numpy()
                 rgb_pred_mask_np = rgb_pred_mask.squeeze(0).cpu().detach().numpy()
                 colors_np = colors.squeeze(0).cpu().detach().numpy()
+                upper_mask_np = upper_mask.squeeze(0, 3).cpu().detach().numpy()
+                lower_mask_np = lower_mask.squeeze(0, 3).cpu().detach().numpy()
                 image_name = data["image_name"][0][:-4]
+                
                 imageio.imwrite(
                     f"{self.render_dir}/composition/train_{image_name}.png",
                     (canvas * 255).astype(np.uint8),
@@ -852,6 +881,16 @@ class Runner:
                     f"{self.render_dir}/mask/train_{image_name}.png",
                     (rgb_pred_mask_np * 255).astype(np.uint8),
                 )
+                os.makedirs(f"{self.render_dir}/upper_mask", exist_ok=True)
+                imageio.imwrite(
+                    f"{self.render_dir}/upper_mask/train_{image_name}.png",
+                    (upper_mask_np * 255).astype(np.uint8),
+                )
+                os.makedirs(f"{self.render_dir}/lower_mask", exist_ok=True)
+                imageio.imwrite(
+                    f"{self.render_dir}/lower_mask/train_{image_name}.png",
+                    (lower_mask_np * 255).astype(np.uint8),
+                )
                 global_tic += time.time() - st_interval
 
             # save checkpoint
@@ -869,6 +908,7 @@ class Runner:
                     {
                         "step": step,
                         "splats": self.splats.state_dict(),
+                        "spotless_module": self.spotless_module.state_dict(),  # ← Add this line
                     },
                     f"{self.ckpt_dir}/ckpt_{step}.pt",
                 )
@@ -1113,6 +1153,97 @@ class Runner:
         torch.cuda.empty_cache()
 
     @torch.no_grad()
+    def get_masks(self, step:int):
+        cfg = self.cfg
+        device = self.device
+        trainloader = torch.utils.data.DataLoader(
+            self.trainset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=1,
+        )
+        for i, data in enumerate(trainloader):
+            # camera parameters
+            camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
+            Ks = data["K"].to(device)  # [1, 3, 3]
+            # ground truth
+            pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            image_ids = data["image_id"].to(device)
+            
+            height, width = pixels.shape[1:3]
+
+            torch.cuda.synchronize()
+            # rendering
+            colors, _, _ = self.rasterize_splats(
+                camtoworlds=camtoworlds,
+                Ks=Ks,
+                width=width,
+                height=height,
+                sh_degree=cfg.sh_degree,
+                near_plane=cfg.near_plane,
+                far_plane=cfg.far_plane,
+            )  # [1, H, W, 3]
+            colors = torch.clamp(colors, 0.0, 1.0)
+            torch.cuda.synchronize()
+
+            # use spotless mlp to predict the mask
+            # stable diffusion features
+            sf = data["semantics"].to(device)
+            sf = nn.Upsample(
+                    size=(colors.shape[1], colors.shape[2]),
+                    mode="bilinear",
+            )(sf).squeeze(0)
+            pos_enc = get_positional_encodings(
+                    colors.shape[1], colors.shape[2], 20
+            ).permute((2, 0, 1))
+            sf = torch.cat([sf, pos_enc], dim=0)
+            sf_flat = sf.reshape(sf.shape[0], -1).permute((1, 0))
+            self.spotless_module.eval()
+            # get mask
+            pred_mask_up = self.spotless_module(sf_flat)
+            pred_mask = pred_mask_up.reshape(
+                1, colors.shape[1], colors.shape[2], 1
+            )
+            log_pred_mask = pred_mask.clone()
+            rgb_pred_mask = (
+                (log_pred_mask > 0.5).repeat(1, 1, 1, 3).clone().detach()
+            )
+            canvas = (
+                torch.cat([pixels, rgb_pred_mask, colors], dim=2)
+                .squeeze(0)
+                .cpu()
+                .detach()
+                .numpy()
+            )
+
+            imname = image_ids.cpu().detach().numpy()
+            os.makedirs(f"{self.render_dir}/composition_{step}", exist_ok=True)
+            pixels_np = pixels.squeeze(0).cpu().detach().numpy()
+            rgb_pred_mask_np = rgb_pred_mask.squeeze(0).cpu().detach().numpy()
+            colors_np = colors.squeeze(0).cpu().detach().numpy()
+            image_name = data["image_name"][0][:-4]
+            imageio.imwrite(
+                f"{self.render_dir}/composition_{step}/train_{image_name}.png",
+                (canvas * 255).astype(np.uint8),
+            )
+            os.makedirs(f"{self.render_dir}/data_{step}", exist_ok=True)
+            imageio.imwrite(
+                f"{self.render_dir}/data_{step}/train_{image_name}.png",
+                (pixels_np * 255).astype(np.uint8),
+            )
+            os.makedirs(f"{self.render_dir}/render_{step}", exist_ok=True)
+            imageio.imwrite(
+                f"{self.render_dir}/render_{step}/train_{image_name}.png",
+                (colors_np * 255).astype(np.uint8),
+            )
+            os.makedirs(f"{self.render_dir}/mask_{step}", exist_ok=True)
+            imageio.imwrite(
+                f"{self.render_dir}/mask_{step}/train_{image_name}.png",
+                (rgb_pred_mask_np[..., -1] * 255).astype(np.uint8),
+            )
+
+
+    @torch.no_grad()
     def eval(self, step: int):
         """Entry for evaluation."""
         print("Running evaluation...")
@@ -1267,8 +1398,11 @@ def main(cfg: Config):
     if cfg.ckpt is not None:
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
+        if "spotless_module" in ckpt:
+            runner.spotless_module.load_state_dict(ckpt["spotless_module"])
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
+        runner.get_masks(step=ckpt["step"])
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
     else:

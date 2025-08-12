@@ -89,8 +89,11 @@ class Parser:
         else:
             image_dir = colmap_image_dir
 
+
         for k in imdata:
             im = imdata[k]
+
+            name = imdata[k].name
 
             rot = im.R()
             trans = im.tvec.reshape(3, 1)
@@ -405,6 +408,7 @@ class ClutterDataset(Dataset):
         train_keyword: str = "clutter",
         test_keyword: str = "extra",
         semantics: bool = False,
+        use_post_mask: bool = False,
     ):
         super().__init__(
             parser,
@@ -414,6 +418,7 @@ class ClutterDataset(Dataset):
         )
         indices = np.arange(len(self.parser.image_names))
         self.semantics = semantics
+        self.use_post_mask = use_post_mask
         if train_keyword == "":
             if split == "train":
                 self.indices = indices[indices % self.parser.test_every != 0]
@@ -432,13 +437,18 @@ class ClutterDataset(Dataset):
                     for idx in indices
                     if self.parser.image_names[idx].find(test_keyword) != -1
                 ]
-
     def __getitem__(self, item: int) -> Dict[str, Any]:
         data = super().__getitem__(item)
         if self.semantics:
             index = self.indices[item]
             data["semantics"] = torch.from_numpy(self.parser.features[index]).float()
-
+            data["image_name"] = self.parser.image_names[index]
+            if self.use_post_mask:
+                name = self.parser.image_names[index]
+                base_name = os.path.splitext(name)[0]
+                outlier_filename = f"train_{base_name}.png"
+                post_mask = imageio.imread(os.path.join(self.parser.data_dir, "mask", outlier_filename))/255. 
+                data["post_mask"] = torch.from_numpy(post_mask).float()
         return data
 
 
