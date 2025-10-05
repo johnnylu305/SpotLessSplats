@@ -1,25 +1,23 @@
-scene="patio_high"
-# training
-CUDA_VISIBLE_DEVICES=0 python3 spotless_trainer.py \
-    --data_dir /home/johnny305/Documents/dfpaint/dataset/${scene}/ \
-    --data_factor 8 \
-    --result_dir /home/johnny305/Documents/dfpaint/dataset/results/${scene}_gt/ \
-    --loss_type robust \
-    --semantics \
-    --no-cluster \
-    --train_keyword "clutter" \
-    --test_keyword "extra" \
-    --disable_viewer \
-    --use_post_mask
+scene="patio_high_gt_difix"
+# First training
 CUDA_VISIBLE_DEVICES=0 python spotless_trainer.py \
     --data_dir /home/johnny305/Documents/dfpaint/dataset/${scene}/ \
     --data_factor 8 \
-    --result_dir /home/johnny305/Documents/dfpaint/dataset/results/${scene}_gt/ \
+    --result_dir /home/johnny305/Documents/dfpaint/dataset/results/${scene}_first/ \
+    --loss_type robust \
+    --semantics \
+    --no-cluster \
+    --train_keyword "clutter" \
+    --test_keyword "extra" \
+    --disable_viewer
+CUDA_VISIBLE_DEVICES=0 python spotless_trainer.py \
+    --data_dir /home/johnny305/Documents/dfpaint/dataset/${scene}/ \
+    --data_factor 8 \
+    --result_dir /home/johnny305/Documents/dfpaint/dataset/results/${scene}_first/ \
     --loss_type robust \
     --semantics \
     --no-cluster \
     --train_keyword "clutter" \
     --test_keyword "extra" \
     --disable_viewer \
-    --ckpt /home/johnny305/Documents/dfpaint/dataset/results/${scene}_gt/ckpts/ckpt_29999.pt
-
+    --ckpt /home/johnny305/Documents/dfpaint/dataset/results/${scene}_first/ckpts/ckpt_29999.pt 

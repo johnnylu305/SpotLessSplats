@@ -32,8 +32,44 @@ from utils import (
 )
 
 from gsplat.rendering import rasterization
-
 import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+import sys
+sys.path.append("/home/johnny305/Documents/dfpaint/Difix3D/src")
+from pipeline_difix import DifixPipeline
+from diffusers.utils import load_image
+from diffusers.utils import logging
+from PIL import Image
+logging.disable_progress_bar()
+
+pipe = DifixPipeline.from_pretrained("nvidia/difix", trust_remote_code=True)
+pipe.to("cuda")
+prompt = "remove degradation"
+
+
+def pad_to_multiple_of_8(tensor: torch.Tensor):
+    """
+    Pad H and W of a BCHW or BHWC tensor to next multiple of 8.
+    Returns padded tensor and (H_orig, W_orig).
+    """
+    if tensor.ndim == 4 and tensor.shape[-1] == 3:  # BHWC
+        B,H,W,C = tensor.shape
+        tensor = tensor.permute(0,3,1,2).contiguous()  # → BCHW
+    elif tensor.ndim == 4 and tensor.shape[1] == 3:  # BCHW
+        B,C,H,W = tensor.shape
+    else:
+        raise ValueError("Expected shape [B,H,W,3] or [B,3,H,W]")
+
+    H_pad = (8 - H % 8) % 8
+    W_pad = (8 - W % 8) % 8
+
+    padded = F.pad(tensor, (0, W_pad, 0, H_pad), mode="reflect")
+    return padded, (H, W)
+
+def crop_to_original(tensor: torch.Tensor, orig_hw):
+    """Crop BCHW tensor back to original H,W."""
+    H, W = orig_hw
+    return tensor[..., :H, :W]
 
 
 def logpred_to_heatmap(log_pred_mask: torch.Tensor, cmap: str = "viridis") -> torch.Tensor:
@@ -641,6 +677,25 @@ class Runner:
                 pred_mask = self.robust_mask(
                     error_per_pixel, self.running_stats["avg_err"]
                 )
+
+
+                colors_padded, orig_hw = pad_to_multiple_of_8(colors)
+                difix_img = pipe(prompt, image=colors_padded, num_inference_steps=1, timesteps=[199], guidance_scale=0.0, tqdm_disable=True).images[0]
+                # Convert PIL -> numpy (HWC, uint8)
+                difix_img = np.array(difix_img)  # (H, W, 3), RGB, dtype=uint8
+                # Convert -> torch float [0,1], HWC
+                difix_img = torch.from_numpy(difix_img).float() / 255.0  # (H, W, 3)
+                # Add batch dimension, match colors shape [B,H,W,C]
+                difix_img = difix_img.unsqueeze(0)
+                # Crop to original size
+                difix_img = difix_img[:, :orig_hw[0], :orig_hw[1], :].to(colors.device)
+                # difix_img: [1,H,W,3] float [0,1] on CUDA
+                out_np = (difix_img[0].detach().cpu().clamp(0,1).numpy() * 255).astype("uint8")  # HWC uint8
+                out_pil = Image.fromarray(out_np, mode="RGB")
+                out_pil.save("./example_output_noref.png")
+
+                error_difix = torch.abs(colors - difix_img)
+
                 if cfg.semantics:
                     sf = data["semantics"].to(device)
                     if cfg.cluster:
@@ -697,7 +752,7 @@ class Runner:
             ssimloss = 1.0 - self.ssim(
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
-            loss = rgbloss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            loss = rgbloss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda + 0.1*((1-pred_mask.clone().detach())*error_difix).mean()
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -1258,8 +1313,19 @@ class Runner:
 
                 heatmaps = logpred_to_heatmap(log_pred_mask)
 
+                colors_padded, orig_hw = pad_to_multiple_of_8(colors)
+                difix_img = pipe(prompt, image=colors_padded, num_inference_steps=1, timesteps=[199], guidance_scale=0.0, tqdm_disable=True).images[0]
+                # Convert PIL -> numpy (HWC, uint8)
+                difix_img = np.array(difix_img)  # (H, W, 3), RGB, dtype=uint8
+                # Convert -> torch float [0,1], HWC
+                difix_img = torch.from_numpy(difix_img).float() / 255.0  # (H, W, 3)
+                # Add batch dimension, match colors shape [B,H,W,C]
+                difix_img = difix_img.unsqueeze(0)
+                # Crop to original size
+                difix_img = difix_img[:, :orig_hw[0], :orig_hw[1], :].to(colors.device)
+
                 canvas = (
-                    torch.cat([pixels, rgb_pred_mask, colors, heatmaps], dim=2)
+                    torch.cat([pixels, rgb_pred_mask, colors, heatmaps, difix_img], dim=2)
                     .squeeze(0)
                     .cpu()
                     .detach()

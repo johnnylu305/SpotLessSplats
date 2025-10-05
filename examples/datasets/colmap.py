@@ -227,7 +227,7 @@ class Parser:
             self.Ks_dict[camera_id] = K
             width, height = self.imsize_dict[camera_id]
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
-
+        
         # undistortion
         self.mapx_dict = dict()
         self.mapy_dict = dict()
@@ -252,6 +252,7 @@ class Parser:
             self.mapx_dict[camera_id] = mapx
             self.mapy_dict[camera_id] = mapy
             self.roi_undist_dict[camera_id] = roi_undist
+        
 
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
@@ -393,6 +394,7 @@ class Dataset:
             data["points"] = torch.from_numpy(points).float()
             data["depths"] = torch.from_numpy(depths).float()
 
+
         return data
 
 
@@ -448,7 +450,27 @@ class ClutterDataset(Dataset):
                 base_name = os.path.splitext(name)[0]
                 outlier_filename = f"train_{base_name}.png"
                 post_mask = imageio.imread(os.path.join(self.parser.data_dir, "mask", outlier_filename))/255. 
+                #print(post_mask.shape)
+                
+                # undistort masks
+                camera_id = self.parser.camera_ids[index]
+                params = self.parser.params_dict[camera_id]
+                if len(params) > 0:
+                    # Images are distorted. Undistort them.
+                    mapx, mapy = (
+                        self.parser.mapx_dict[camera_id],
+                        self.parser.mapy_dict[camera_id],
+                    )
+                    post_mask = cv2.remap(post_mask, mapx, mapy, cv2.INTER_NEAREST)
+                    x, y, w, h = self.parser.roi_undist_dict[camera_id]
+                    post_mask = post_mask[y : y + h, x : x + w]
+                    #print(post_mask.shape)
+
                 data["post_mask"] = torch.from_numpy(post_mask).float()
+        else:
+            index = self.indices[item]
+            data["image_name"] = self.parser.image_names[index]
+
         return data
 
 

@@ -15,7 +15,8 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from typing import Any, Callable, Dict, List, Optional, Union
-from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
+#from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
+from diffusers import UNet2DConditionModel
 from diffusers import DDIMScheduler
 from diffusers import StableDiffusionPipeline
 
@@ -282,11 +283,12 @@ dift = SDFeaturizer()
 import os
 
 #root = "../data/spotless/yoda3/" # @param
-root = "/projects/MAD3D/ChengYou/CA3/patio_high_undist/"
+root = "/home/johnny305/Documents/gendf/Real_World_Data/040625-LundoBin2/040625-LundoBin-All/"
 #"/projects/MAD3D/ChengYou/CA3/patio_high_SD/"
 if not os.path.exists(root+"SD"):
     os.mkdir(root+"SD")
-filelist = os.listdir(root+"images")
+#filelist = os.listdir(root+"images")
+filelist = os.listdir(root+"images_8")
 
 img_size = 800
 
@@ -294,7 +296,8 @@ for filename in filelist:
     name = filename.split('.')[0] + '.npy'
     if os.path.exists(root+"SD/"+name):
         continue
-    img = PIL.Image.open(root+"images/"+filename).convert('RGB')
+    #img = PIL.Image.open(root+"images/"+filename).convert('RGB')
+    img = PIL.Image.open(root+"images_8/"+filename).convert('RGB')
     img = img.resize((img_size, img_size))
     img_tensor = (torch.tensor(np.array(img)) / 255.0 - 0.5) * 2
     img_tensor = img_tensor.permute(2,0,1)

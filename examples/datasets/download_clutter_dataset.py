@@ -7,7 +7,7 @@ import argparse
 # e.g. run command for patio scene: python download_clutter_dataset.py patio
 
 # Configuration
-API_TOKEN = "YOUR_BOREALIS_DATAVERSE_TOKEN"
+API_TOKEN = "03dfa71f-6524-4f66-bab9-8051d2622531"
 BASE_URL = "https://borealisdata.ca"
 DATASET_DOI = "doi:10.5683/SP3/WOFXFT"
 HEADERS = {"X-Dataverse-key": API_TOKEN}
